@@ -1,0 +1,17 @@
+# Go core build output
+core/build/
+
+# Generated Xcode project (regenerate with `xcodegen generate`)
+TgWsProxy/*.xcodeproj
+TgWsProxy/*.xcworkspace
+
+# Xcode / macOS
+DerivedData/
+build/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Go
+*.a
+*.h.bak
