@@ -43,6 +43,10 @@ build_slice() {
   local dir="$OUT_DIR/$name"
   mkdir -p "$dir"
 
+  # clang uses different arch names than Go's GOARCH (amd64 -> x86_64).
+  local clangarch="$goarch"
+  [ "$goarch" = "amd64" ] && clangarch="x86_64"
+
   local sdk_path clang
   sdk_path="$(xcrun --sdk "$sdk" --show-sdk-path)"
   clang="$(xcrun --sdk "$sdk" --find clang)"
@@ -51,8 +55,8 @@ build_slice() {
   CGO_ENABLED=1 \
   GOOS=ios \
   GOARCH="$goarch" \
-  CGO_CFLAGS="-isysroot $sdk_path -arch $goarch $minflag" \
-  CGO_LDFLAGS="-isysroot $sdk_path -arch $goarch $minflag" \
+  CGO_CFLAGS="-isysroot $sdk_path -arch $clangarch $minflag" \
+  CGO_LDFLAGS="-isysroot $sdk_path -arch $clangarch $minflag" \
   CC="$clang" \
     go build -buildmode=c-archive -tags ios \
       -o "$dir/$LIB_NAME" .
@@ -61,17 +65,31 @@ build_slice() {
 # Device (arm64, iphoneos)
 build_slice "ios-arm64" "arm64" "iphoneos" "-mios-version-min=$MIN_IOS"
 
-# Simulator (arm64 + amd64, iphonesimulator) — combined with lipo below
+# Simulator arm64 (Apple Silicon Macs) — required.
 build_slice "sim-arm64" "arm64" "iphonesimulator" "-mios-simulator-version-min=$MIN_IOS"
-build_slice "sim-amd64" "amd64" "iphonesimulator" "-mios-simulator-version-min=$MIN_IOS"
+
+# Simulator x86_64 (Intel Macs) — optional. Skip with BUILD_SIM_X86=0, and
+# don't fail the whole build if this slice can't compile.
+SIM_X86_OK=0
+if [ "${BUILD_SIM_X86:-1}" = "1" ]; then
+  if build_slice "sim-amd64" "amd64" "iphonesimulator" "-mios-simulator-version-min=$MIN_IOS"; then
+    SIM_X86_OK=1
+  else
+    echo ">> warning: x86_64 simulator slice failed — building arm64-only simulator" >&2
+  fi
+fi
 
 # Fat simulator archive
 SIM_DIR="$OUT_DIR/ios-simulator"
 mkdir -p "$SIM_DIR"
-lipo -create \
-  "$OUT_DIR/sim-arm64/$LIB_NAME" \
-  "$OUT_DIR/sim-amd64/$LIB_NAME" \
-  -output "$SIM_DIR/$LIB_NAME"
+if [ "$SIM_X86_OK" = "1" ]; then
+  lipo -create \
+    "$OUT_DIR/sim-arm64/$LIB_NAME" \
+    "$OUT_DIR/sim-amd64/$LIB_NAME" \
+    -output "$SIM_DIR/$LIB_NAME"
+else
+  cp "$OUT_DIR/sim-arm64/$LIB_NAME" "$SIM_DIR/$LIB_NAME"
+fi
 # header is identical across slices
 cp "$OUT_DIR/sim-arm64/$HEADER_NAME" "$SIM_DIR/$HEADER_NAME"
 
