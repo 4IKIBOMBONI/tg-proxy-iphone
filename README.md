@@ -81,11 +81,21 @@ xcodegen generate               # → TgWsProxy.xcodeproj
 open TgWsProxy.xcodeproj
 ```
 
-В Xcode перед запуском:
+### Bundle id и команда разработчика
 
-1. Выбрать свою команду разработчика (**Signing & Capabilities → Team**) для обоих таргетов (`TgWsProxy` и `Tunnel`).
-2. Убедиться, что в обоих таргетах есть capabilities **App Groups** (`group.com.tgwsproxy.shared`) и **Network Extensions → Packet Tunnel**.
-3. При необходимости поменять bundle id и App Group в `project.yml` и `Shared/AppGroup.swift` (значения должны совпадать).
+Bundle id обоих таргетов выводятся из **одной переменной** `APP_ID_BASE` в `project.yml`:
+- приложение → `$(APP_ID_BASE)`
+- расширение → `$(APP_ID_BASE).tunnel`
+
+Это гарантирует правило iOS «id расширения должен начинаться с id приложения». Чтобы поставить свой id, поменяйте **только** `APP_ID_BASE` в `project.yml` и пересоберите проект (`xcodegen generate`). Id туннеля в Swift вычисляется из bundle id приложения в рантайме, так что синхронизировать руками ничего не нужно.
+
+> ⚠️ Не меняйте bundle id прямо в Xcode — `xcodegen generate` перезапишет проект. Правьте `project.yml`.
+
+Команду разработчика можно задать двумя способами:
+- в `project.yml`: `DEVELOPMENT_TEAM: ВАШ_TEAM_ID`, затем `xcodegen generate`, **или**
+- в Xcode: **Signing & Capabilities → Team** для обоих таргетов (`TgWsProxy` и `Tunnel`).
+
+В Xcode также убедитесь, что у обоих таргетов есть capabilities **App Groups** (`group.com.tgwsproxy.shared`) и **Network Extensions → Packet Tunnel**. App Group должен быть зарегистрирован в вашем аккаунте; при необходимости поменяйте его в `Shared/AppGroup.swift` и в обоих `*.entitlements`.
 
 > Идентификаторы по умолчанию: app `com.tgwsproxy.app`, расширение `com.tgwsproxy.app.tunnel`, App Group `group.com.tgwsproxy.shared`.
 

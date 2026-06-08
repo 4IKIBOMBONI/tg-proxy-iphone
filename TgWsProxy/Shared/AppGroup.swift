@@ -10,7 +10,15 @@ enum AppGroup {
     static let identifier = "group.com.tgwsproxy.shared"
 
     /// Bundle identifier of the Packet Tunnel provider extension.
-    static let tunnelBundleIdentifier = "com.tgwsproxy.app.tunnel"
+    ///
+    /// Derived from the host app's own bundle id (`<app id>.tunnel`) so it
+    /// always matches `project.yml` regardless of the APP_ID_BASE you pick —
+    /// no hardcoded value to keep in sync. iOS requires the extension id to be
+    /// prefixed by the app id, which this guarantees.
+    static var tunnelBundleIdentifier: String {
+        let base = Bundle.main.bundleIdentifier ?? "com.tgwsproxy.app"
+        return base + ".tunnel"
+    }
 
     /// Shared UserDefaults backed by the App Group container.
     static var defaults: UserDefaults {
