@@ -43,7 +43,7 @@ struct ProxySettings: Codable, Equatable {
 
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
-        AppGroup.defaults.set(data, forKey: storeKey)
+        AppGroup.defaults.set(data, forKey: Self.storeKey)
     }
 
     // MARK: Helpers
