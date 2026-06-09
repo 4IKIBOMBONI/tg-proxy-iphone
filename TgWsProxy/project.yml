@@ -2,7 +2,7 @@ name: TgWsProxy
 options:
   bundleIdPrefix: com.tgwsproxy
   deploymentTarget:
-    iOS: "15.0"
+    iOS: "17.0"
   createIntermediateGroups: true
 
 settings:
@@ -41,9 +41,11 @@ targets:
       - framework: ../core/build/TgWsProxyCore.xcframework
         embed: false
       - target: Tunnel
+      - target: ControlExtension
       - sdk: Security.framework
       - sdk: CoreFoundation.framework
       - sdk: NetworkExtension.framework
+      - sdk: AppIntents.framework
 
   # ---------------------------------------------------- Packet Tunnel ext
   Tunnel:
@@ -66,11 +68,36 @@ targets:
       - sdk: CoreFoundation.framework
       - sdk: NetworkExtension.framework
 
+  # ---------------------------------------------------- Control Widget ext
+  # iOS 18 Control Center widget that exposes a start/stop toggle. Built as a
+  # plain ExtensionKit / WidgetKit extension; only ships Swift code that
+  # touches AppIntents + NetworkExtension (NETunnelProviderManager), no Go core.
+  ControlExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: ControlExtension
+      - path: Shared
+        excludes:
+          - ProxyCore.swift
+          - TgWsProxyCore-Bridging-Header.h
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(APP_ID_BASE).control
+        INFOPLIST_FILE: ControlExtension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: ControlExtension/ControlExtension.entitlements
+    dependencies:
+      - sdk: NetworkExtension.framework
+      - sdk: AppIntents.framework
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+
 schemes:
   TgWsProxy:
     build:
       targets:
         TgWsProxy: all
         Tunnel: all
+        ControlExtension: all
     run:
       config: Debug

@@ -24,7 +24,9 @@ Telegram iOS → Локальный MTProto (127.0.0.1:1443) → TG WS Proxy →
 - **Фоновая работа через Packet Tunnel** — прокси живёт в сетевом расширении, поэтому не выгружается, когда приложение свёрнуто.
 - **SwiftUI-интерфейс** — старт/стоп, статистика в реальном времени, лог-вьюер, настройки.
 - **Кнопка «Применить в Telegram»** — передаёт прокси в Telegram/AyuGram/NekoGram и др. через `tg://proxy`.
-- **Настройки** — порт, секрет (с генерацией), размер пула (2–16), CloudFlare вкл/выкл + свой домен, FakeTLS + SNI, ручные DC→IP, подробные логи.
+- **Control Center / Siri / Shortcuts (iOS 17–18+)** — старт/стоп прокси одним тапом из Пункта управления, голосом или из автоматизаций, без открытия приложения.
+- **Connect On Demand** — iOS сам поднимает VPN-прокси, как только Telegram пытается обратиться к сети.
+- **Настройки** — порт, секрет (с генерацией), размер пула (2–16), CloudFlare вкл/выкл + свой домен, FakeTLS + SNI, ручные DC→IP, On Demand-домены, подробные логи.
 
 ## Архитектура
 
@@ -36,18 +38,23 @@ tg-proxy-iphone/
 │   ├── go.mod
 │   └── build-xcframework.sh      # сборка TgWsProxyCore.xcframework (c-archive)
 └── TgWsProxy/                    # Xcode-проект (генерируется из project.yml)
-    ├── project.yml               # XcodeGen-спека (2 таргета: app + tunnel)
+    ├── project.yml               # XcodeGen-спека (3 таргета: app + tunnel + control)
     ├── App/                      # SwiftUI-приложение
     │   ├── TgWsProxyApp.swift
     │   ├── ContentView.swift
     │   ├── ProxyController.swift  # управление NETunnelProviderManager
+    │   ├── AppIntents/             # ToggleProxyIntent + AppShortcutsProvider (Siri)
     │   └── Views/                 # Status / Log / Settings / Info
     ├── Tunnel/                    # NEPacketTunnelProvider
     │   └── PacketTunnelProvider.swift
-    └── Shared/                    # общий код app+extension
+    ├── ControlExtension/          # iOS 18 Control Center widget (toggle)
+    │   └── ProxyToggleControl.swift
+    └── Shared/                    # общий код app+extensions
         ├── AppGroup.swift
         ├── ProxySettings.swift
-        ├── ProxyCore.swift        # Swift-обёртка над C-API ядра
+        ├── ProxyToggle.swift       # headless start/stop, без UI/Go
+        ├── ProxyOnDemand.swift     # NEOnDemandRule по доменам Telegram
+        ├── ProxyCore.swift         # Swift-обёртка над C-API ядра
         └── TgWsProxyCore-Bridging-Header.h
 ```
 
@@ -72,7 +79,8 @@ iOS разрешает **только один активный VPN-туннел
 
 ## Требования
 
-- **macOS** с **Xcode 15+**.
+- **macOS** с **Xcode 16+** (Control Widget = iOS 18 SDK).
+- **iOS 17.0+** на устройстве (App Intents / Siri Shortcuts). Кнопка в Пункте управления требует **iOS 18+**.
 - **Go 1.21+** (модуль таргетит 1.26), `CGO_ENABLED=1`.
 - [**XcodeGen**](https://github.com/yonyz/XcodeGen) (`brew install xcodegen`).
 - **Платный аккаунт Apple Developer** — нужен entitlement **Network Extensions (Packet Tunnel)** и **App Groups**. На бесплатном аккаунте Packet Tunnel недоступен.
@@ -116,6 +124,24 @@ Bundle id обоих таргетов выводятся из **одной пе�
 2. Дождаться статуса «Прокси работает».
 3. Нажать **«Применить в Telegram»** — откроется Telegram с готовыми настройками прокси, подтвердить подключение.
 4. Логи и статистику можно смотреть на соответствующих вкладках.
+
+### Запуск без открытия приложения
+
+| Способ | Где | Требует |
+|--------|-----|---------|
+| **Siri** — «Эй, Siri, переключи прокси Telegram» | в любом приложении | iOS 17+ |
+| **Shortcuts.app** — действие «Переключить прокси Telegram» (а также Start / Stop) | автоматизации, NFC-тег, виджет на экране «Домой» | iOS 17+ |
+| **Пункт управления** — тоггл «Прокси Telegram» (`Настройки → Пункт управления → Добавить элементы`) | свайп вниз из правого верхнего угла | iOS 18+ |
+
+Все три способа делают одно и то же — переключают тот же VPN-туннель, что и кнопка в приложении, и сохраняют состояние между запусками. Локальный (in-app) режим из системных контролов **не** запускается — он живёт только пока приложение активно, и поднять его из фонового процесса iOS не разрешает.
+
+### Авто-запуск при открытии Telegram (Connect On Demand)
+
+В `Настройки → Connect On Demand` включите тумблер «Запускать автоматически для Telegram». iOS будет поднимать VPN-прокси сам, как только система попытается разрешить любой из триггер-доменов (`telegram.org`, `t.me`, `telegram-cdn.org` и др.). Это срабатывает прозрачно при первом обращении Telegram к сети — отдельный тап не нужен.
+
+> ⚠️ On Demand работает только в VPN-режиме (Packet Tunnel). В локальном режиме iOS не имеет туннеля, который мог бы триггериться. iOS также не позволяет триггерить On Demand по запуску конкретного приложения — ближайший доступный механизм это домены, что и используется здесь.
+
+Чтобы по-настоящему остановить туннель при включённом On Demand, выключите либо сам тумблер On Demand в настройках приложения, либо отключите профиль в `Настройки → VPN`. Нажатие «стоп» (в приложении, Control Center или Shortcuts) временно опускает туннель и автоматически выключает On Demand, чтобы он не поднимался обратно.
 
 ## Ограничения iOS
 

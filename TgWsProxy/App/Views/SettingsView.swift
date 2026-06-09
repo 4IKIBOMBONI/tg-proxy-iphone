@@ -30,6 +30,32 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
+                if controller.settings.backgroundMode == .vpn {
+                    Section {
+                        Toggle("Запускать автоматически для Telegram",
+                               isOn: $controller.settings.onDemandEnabled)
+                        if controller.settings.onDemandEnabled {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Домены-триггеры")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                                TextField(ProxySettings.defaultOnDemandDomains.joined(separator: ", "),
+                                          text: $controller.settings.onDemandDomains,
+                                          axis: .vertical)
+                                    .font(.system(.footnote, design: .monospaced))
+                                    .autocorrectionDisabled()
+                                    .textInputAutocapitalization(.never)
+                                    .lineLimit(2...4)
+                                Text("Пусто — использовать список по умолчанию (\(ProxySettings.defaultOnDemandDomains.count) доменов Telegram).")
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                    } header: {
+                        Text("Connect On Demand")
+                    } footer: {
+                        Text("iOS поднимет VPN-прокси автоматически, как только система попытается разрешить любой из этих доменов — то есть при первом обращении Telegram к сети. Работает только в VPN-режиме.")
+                    }
+                }
+
                 Section("Локальный прокси") {
                     HStack {
                         Text("Порт")

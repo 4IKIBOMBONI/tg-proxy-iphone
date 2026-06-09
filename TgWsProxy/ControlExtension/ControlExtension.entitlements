@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Same Network Extension entitlement as the host app. The Control widget
+        uses NETunnelProviderManager to start/stop the existing tunnel; it does
+        not own a Packet Tunnel of its own, so `packet-tunnel-provider` is what
+        we need (not a separate `app-proxy-provider`).
+    -->
+    <key>com.apple.developer.networking.networkextension</key>
+    <array>
+        <string>packet-tunnel-provider</string>
+    </array>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.com.tgwsproxy.shared</string>
+    </array>
+</dict>
+</plist>

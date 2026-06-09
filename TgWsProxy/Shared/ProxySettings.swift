@@ -54,6 +54,39 @@ struct ProxySettings: Codable, Equatable {
     var dcIps: String = ""
     /// VPN (Packet Tunnel) vs local (in-app) background mode.
     var backgroundMode: BackgroundMode = .vpn
+    /// Connect On Demand: when enabled and the proxy is in VPN mode, iOS will
+    /// auto-start the tunnel whenever traffic is requested for one of the
+    /// configured trigger domains (Telegram by default). Has no effect in
+    /// local mode (no NETunnelProviderManager involved).
+    var onDemandEnabled: Bool = false
+    /// Comma-separated list of DNS suffixes that trigger the tunnel via
+    /// NEEvaluateConnectionRule. Each entry matches the suffix of the
+    /// hostname being resolved (e.g. "telegram.org" matches "core.telegram.org").
+    /// Empty means "use the built-in defaults".
+    var onDemandDomains: String = ""
+
+    /// Default trigger domains used when `onDemandDomains` is empty.
+    static let defaultOnDemandDomains: [String] = [
+        "telegram.org",
+        "t.me",
+        "telegram-cdn.org",
+        "telesco.pe",
+        "tg.dev",
+        "cdn-telegram.org",
+    ]
+
+    /// Returns the effective list of trigger domains for On Demand, normalised
+    /// (trimmed, lowercased, deduplicated, no empties).
+    var effectiveOnDemandDomains: [String] {
+        let raw = onDemandDomains
+            .split(whereSeparator: { $0 == "," || $0 == " " || $0 == "\n" })
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        let list = raw.isEmpty ? Self.defaultOnDemandDomains : raw
+        var seen = Set<String>(), out: [String] = []
+        for d in list where seen.insert(d).inserted { out.append(d) }
+        return out
+    }
 
     // MARK: Persistence
 
@@ -94,6 +127,8 @@ struct ProxySettings: Codable, Equatable {
         verboseLogging = try c.decodeIfPresent(Bool.self, forKey: .verboseLogging) ?? d.verboseLogging
         dcIps = try c.decodeIfPresent(String.self, forKey: .dcIps) ?? d.dcIps
         backgroundMode = try c.decodeIfPresent(BackgroundMode.self, forKey: .backgroundMode) ?? d.backgroundMode
+        onDemandEnabled = try c.decodeIfPresent(Bool.self, forKey: .onDemandEnabled) ?? d.onDemandEnabled
+        onDemandDomains = try c.decodeIfPresent(String.self, forKey: .onDemandDomains) ?? d.onDemandDomains
     }
 
     // MARK: Helpers

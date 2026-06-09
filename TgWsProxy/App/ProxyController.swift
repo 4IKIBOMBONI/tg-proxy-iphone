@@ -80,7 +80,12 @@ final class ProxyController: ObservableObject {
         pollTask = nil
     }
 
-    func saveSettings() { settings.save() }
+    func saveSettings() {
+        settings.save()
+        // Push On Demand / port changes into the system VPN profile so they
+        // take effect even when the user only edits Settings (no restart).
+        applyVPNPreferences()
+    }
 
     func regenerateSecret() {
         settings.secret = ProxySettings.randomSecret()
@@ -190,15 +195,11 @@ final class ProxyController: ObservableObject {
         refreshFromStatus()
     }
 
-    private func configuredManager() -> NETunnelProviderManager {
-        let mgr = manager ?? NETunnelProviderManager()
-        let proto = NETunnelProviderProtocol()
-        proto.providerBundleIdentifier = AppGroup.tunnelBundleIdentifier
-        proto.serverAddress = "127.0.0.1:\(settings.port)"
-        proto.providerConfiguration = ["port": settings.port]
-        mgr.protocolConfiguration = proto
-        mgr.localizedDescription = "TG WS Proxy"
-        mgr.isEnabled = true
+    private func configuredManager() async throws -> NETunnelProviderManager {
+        // Delegate to the shared helper so the On Demand rules and protocol
+        // configuration stay consistent with what the App Intent / Control
+        // Widget would write.
+        let mgr = try await ProxyToggle.syncManager(settings: settings)
         manager = mgr
         return mgr
     }
@@ -206,15 +207,27 @@ final class ProxyController: ObservableObject {
     private func startVPN() {
         Task {
             do {
-                let mgr = configuredManager()
-                try await mgr.saveToPreferences()
-                try await mgr.loadFromPreferences()
+                let mgr = try await configuredManager()
                 try mgr.connection.startVPNTunnel()
                 activeMode = .vpn
                 startVPNPolling()
             } catch {
                 activeMode = nil
                 state = .failed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Pushes the latest settings (notably On Demand toggle / domain list) to
+    /// the system VPN preferences without starting the tunnel. Safe to call
+    /// even when the proxy is currently stopped.
+    func applyVPNPreferences() {
+        Task {
+            do {
+                _ = try await ProxyToggle.syncManager(settings: settings)
+            } catch {
+                // Non-fatal: surface in logs but don't change the running state.
+                appendLogs("Не удалось обновить VPN-профиль: \(error.localizedDescription)\n")
             }
         }
     }
