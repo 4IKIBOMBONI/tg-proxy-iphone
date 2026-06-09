@@ -53,9 +53,14 @@ struct StatusView: View {
     }
 
     private var statusLabel: some View {
-        Text(statusText)
-            .font(.headline)
-            .foregroundStyle(statusColor)
+        VStack(spacing: 4) {
+            Text(statusText)
+                .font(.headline)
+                .foregroundStyle(statusColor)
+            Text((controller.activeMode ?? controller.settings.backgroundMode).title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var statsCard: some View {

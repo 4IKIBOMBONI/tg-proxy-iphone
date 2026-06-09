@@ -1,10 +1,15 @@
 import Foundation
 import NetworkExtension
 import Combine
+import UIKit
 
-/// App-side controller that drives the Packet Tunnel manager and surfaces the
-/// proxy state to SwiftUI. The proxy itself runs in the extension; this class
-/// only configures it, starts/stops it, and polls it for stats/logs.
+/// App-side controller that drives the proxy in one of two modes:
+///
+/// - `.vpn`:   configures and starts a Packet Tunnel extension; the Go core
+///             runs in that extension and is polled over IPC.
+/// - `.local`: runs the Go core directly in this app process on loopback and
+///             polls it in-process. A short UIKit background task keeps it
+///             alive across the app→Telegram hop.
 @MainActor
 final class ProxyController: ObservableObject {
 
@@ -23,9 +28,15 @@ final class ProxyController: ObservableObject {
     /// Prefixed secret (dd…/ee…) reported by the running core; used for tg://.
     @Published var prefixedSecret: String?
 
+    /// The mode the proxy is *currently running* in (may differ from
+    /// `settings.backgroundMode`, which only takes effect on the next start).
+    private(set) var activeMode: BackgroundMode?
+
     private var manager: NETunnelProviderManager?
     private var pollTask: Task<Void, Never>?
     private var statusObserver: NSObjectProtocol?
+    private var bgObservers: [NSObjectProtocol] = []
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
 
     var isRunning: Bool { state == .running }
 
@@ -40,9 +51,137 @@ final class ProxyController: ObservableObject {
 
     deinit {
         if let statusObserver { NotificationCenter.default.removeObserver(statusObserver) }
+        for o in bgObservers { NotificationCenter.default.removeObserver(o) }
     }
 
-    // MARK: - Manager setup
+    // MARK: - Public control
+
+    func toggle() {
+        isRunning || state == .starting ? stop() : start()
+    }
+
+    func start() {
+        state = .starting
+        settings.save()
+        switch settings.backgroundMode {
+        case .vpn:   startVPN()
+        case .local: startLocal()
+        }
+    }
+
+    func stop() {
+        state = .stopping
+        switch activeMode {
+        case .vpn:   manager?.connection.stopVPNTunnel()
+        case .local: stopLocal()
+        case .none:  state = .stopped
+        }
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    func saveSettings() { settings.save() }
+
+    func regenerateSecret() {
+        settings.secret = ProxySettings.randomSecret()
+        settings.save()
+    }
+
+    /// tg:// link, preferring the prefixed secret reported by the running core.
+    func telegramURL() -> URL? {
+        settings.telegramProxyURL(prefixedSecretOverride: prefixedSecret)
+    }
+
+    func clearLogs() {
+        logLines.removeAll()
+        switch activeMode {
+        case .local:
+            ProxyCore.clearLogs()
+        case .vpn:
+            if let session = manager?.connection as? NETunnelProviderSession {
+                try? session.sendProviderMessage(Data("clearLogs".utf8), responseHandler: nil)
+            }
+        case .none:
+            break
+        }
+    }
+
+    // MARK: - Local mode (in-app core)
+
+    private func startLocal() {
+        do {
+            let prefixed = try ProxyCore.start(with: settings)
+            prefixedSecret = prefixed
+            activeMode = .local
+            state = .running
+            registerBackgroundHandling()
+            startLocalPolling()
+        } catch {
+            activeMode = nil
+            state = .failed(String(describing: error))
+        }
+    }
+
+    private func stopLocal() {
+        ProxyCore.stop()
+        endBackgroundTask()
+        unregisterBackgroundHandling()
+        activeMode = nil
+        state = .stopped
+    }
+
+    private func startLocalPolling() {
+        guard pollTask == nil else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await MainActor.run {
+                    guard let self, self.activeMode == .local else { return }
+                    self.statsText = ProxyCore.statsRu()
+                    let logs = ProxyCore.drainLogs()
+                    if !logs.isEmpty { self.appendLogs(logs) }
+                }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    // Keep the in-app proxy alive briefly when the app is backgrounded (e.g.
+    // while the user is in Telegram confirming the proxy).
+    private func registerBackgroundHandling() {
+        guard bgObservers.isEmpty else { return }
+        let nc = NotificationCenter.default
+        bgObservers.append(nc.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.beginBackgroundTask() }
+        })
+        bgObservers.append(nc.addObserver(
+            forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.endBackgroundTask() }
+        })
+    }
+
+    private func unregisterBackgroundHandling() {
+        for o in bgObservers { NotificationCenter.default.removeObserver(o) }
+        bgObservers.removeAll()
+    }
+
+    private func beginBackgroundTask() {
+        guard activeMode == .local, bgTask == .invalid else { return }
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "tgwsproxy.local") { [weak self] in
+            // Time expired — iOS is about to suspend us. Stop cleanly.
+            Task { @MainActor in self?.stop() }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard bgTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bgTask)
+        bgTask = .invalid
+    }
+
+    // MARK: - VPN mode (Packet Tunnel)
 
     private func loadManager() async {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
@@ -55,7 +194,6 @@ final class ProxyController: ObservableObject {
         let mgr = manager ?? NETunnelProviderManager()
         let proto = NETunnelProviderProtocol()
         proto.providerBundleIdentifier = AppGroup.tunnelBundleIdentifier
-        // Loopback "server" — the address is cosmetic; the real listener is local.
         proto.serverAddress = "127.0.0.1:\(settings.port)"
         proto.providerConfiguration = ["port": settings.port]
         mgr.protocolConfiguration = proto
@@ -65,79 +203,50 @@ final class ProxyController: ObservableObject {
         return mgr
     }
 
-    // MARK: - Start / stop
-
-    func start() {
-        state = .starting
-        // Persist settings so the extension reads the same values.
-        settings.save()
+    private func startVPN() {
         Task {
             do {
                 let mgr = configuredManager()
                 try await mgr.saveToPreferences()
-                try await mgr.loadFromPreferences() // re-read to get a valid session
+                try await mgr.loadFromPreferences()
                 try mgr.connection.startVPNTunnel()
-                startPolling()
+                activeMode = .vpn
+                startVPNPolling()
             } catch {
+                activeMode = nil
                 state = .failed(error.localizedDescription)
             }
         }
     }
 
-    func stop() {
-        state = .stopping
-        manager?.connection.stopVPNTunnel()
-        pollTask?.cancel()
-        pollTask = nil
-    }
-
-    func toggle() {
-        isRunning || state == .starting ? stop() : start()
-    }
-
-    func saveSettings() {
-        settings.save()
-    }
-
-    func regenerateSecret() {
-        settings.secret = ProxySettings.randomSecret()
-        settings.save()
-    }
-
-    // MARK: - Telegram hand-off
-
-    /// tg:// link, preferring the prefixed secret reported by the running core.
-    func telegramURL() -> URL? {
-        settings.telegramProxyURL(prefixedSecretOverride: prefixedSecret)
-    }
-
-    // MARK: - Status / polling
-
     private func refreshFromStatus() {
+        // Ignore VPN status changes while running locally — there is no tunnel.
+        if activeMode == .local { return }
         guard let connection = manager?.connection else { state = .stopped; return }
         switch connection.status {
-        case .connected:    state = .running; startPolling()
-        case .connecting:   state = .starting
+        case .connected:     state = .running; activeMode = .vpn; startVPNPolling()
+        case .connecting:    state = .starting
         case .disconnecting: state = .stopping
         case .disconnected, .invalid:
             if case .failed = state { } else { state = .stopped }
+            if activeMode == .vpn { activeMode = nil }
             pollTask?.cancel(); pollTask = nil
-        case .reasserting:  state = .running
-        @unknown default:   state = .stopped
+        case .reasserting:   state = .running
+        @unknown default:    state = .stopped
         }
     }
 
-    private func startPolling() {
+    private func startVPNPolling() {
         guard pollTask == nil else { return }
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.pollOnce()
+                await self?.pollVPNOnce()
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
             }
         }
     }
 
-    private func pollOnce() async {
+    private func pollVPNOnce() async {
         guard
             let session = manager?.connection as? NETunnelProviderSession,
             session.status == .connected
@@ -167,17 +276,13 @@ final class ProxyController: ObservableObject {
         }
     }
 
+    // MARK: - Shared
+
     private func appendLogs(_ text: String) {
         let incoming = text.split(separator: "\n").map(String.init)
         logLines.append(contentsOf: incoming)
         if logLines.count > 1000 {
             logLines.removeFirst(logLines.count - 1000)
         }
-    }
-
-    func clearLogs() {
-        logLines.removeAll()
-        guard let session = manager?.connection as? NETunnelProviderSession else { return }
-        try? session.sendProviderMessage(Data("clearLogs".utf8), responseHandler: nil)
     }
 }

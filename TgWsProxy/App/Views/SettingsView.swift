@@ -18,6 +18,18 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
 
+                Section("Режим работы") {
+                    Picker("Режим", selection: $controller.settings.backgroundMode) {
+                        ForEach(BackgroundMode.allCases, id: \.self) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                    Text(controller.settings.backgroundMode.subtitle)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section("Локальный прокси") {
                     HStack {
                         Text("Порт")

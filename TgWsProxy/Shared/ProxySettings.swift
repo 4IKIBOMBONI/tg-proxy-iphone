@@ -1,5 +1,33 @@
 import Foundation
 
+/// How the proxy stays alive.
+///
+/// - `vpn`:   runs inside a Packet Tunnel extension. Best background longevity,
+///            but iOS allows only one active VPN tunnel, so it cannot coexist
+///            with another system VPN.
+/// - `local`: runs the Go core directly inside the app process on loopback.
+///            Coexists with any system VPN (the proxy's own traffic even goes
+///            through it), but only works while the app is foreground / for a
+///            short grace period after backgrounding.
+enum BackgroundMode: String, Codable, CaseIterable {
+    case vpn
+    case local
+
+    var title: String {
+        switch self {
+        case .vpn:   return "VPN-режим (фон)"
+        case .local: return "Локальный (совместим с VPN)"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .vpn:   return "Стабильная работа в фоне. Нельзя использовать одновременно с другим VPN."
+        case .local: return "Совместим с любым системным VPN. Работает, пока приложение открыто."
+        }
+    }
+}
+
 /// User-configurable proxy settings, persisted in the shared App Group so both
 /// the app (UI) and the tunnel extension (Go core) read the same values.
 ///
@@ -24,6 +52,8 @@ struct ProxySettings: Codable, Equatable {
     /// Manual DC→IP overrides, e.g. "2:149.154.167.220,4:149.154.167.220".
     /// Empty means "use the core's built-in defaults".
     var dcIps: String = ""
+    /// VPN (Packet Tunnel) vs local (in-app) background mode.
+    var backgroundMode: BackgroundMode = .vpn
 
     // MARK: Persistence
 
@@ -44,6 +74,26 @@ struct ProxySettings: Codable, Equatable {
     func save() {
         guard let data = try? JSONEncoder().encode(self) else { return }
         AppGroup.defaults.set(data, forKey: Self.storeKey)
+    }
+
+    // MARK: Codable (tolerant of missing keys for forward/back compatibility)
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = ProxySettings()
+        host = try c.decodeIfPresent(String.self, forKey: .host) ?? d.host
+        port = try c.decodeIfPresent(Int.self, forKey: .port) ?? d.port
+        secret = try c.decodeIfPresent(String.self, forKey: .secret) ?? d.secret
+        poolSize = try c.decodeIfPresent(Int.self, forKey: .poolSize) ?? d.poolSize
+        cfproxyEnabled = try c.decodeIfPresent(Bool.self, forKey: .cfproxyEnabled) ?? d.cfproxyEnabled
+        cfproxyUserDomain = try c.decodeIfPresent(String.self, forKey: .cfproxyUserDomain) ?? d.cfproxyUserDomain
+        fakeTlsEnabled = try c.decodeIfPresent(Bool.self, forKey: .fakeTlsEnabled) ?? d.fakeTlsEnabled
+        fakeTlsDomain = try c.decodeIfPresent(String.self, forKey: .fakeTlsDomain) ?? d.fakeTlsDomain
+        verboseLogging = try c.decodeIfPresent(Bool.self, forKey: .verboseLogging) ?? d.verboseLogging
+        dcIps = try c.decodeIfPresent(String.self, forKey: .dcIps) ?? d.dcIps
+        backgroundMode = try c.decodeIfPresent(BackgroundMode.self, forKey: .backgroundMode) ?? d.backgroundMode
     }
 
     // MARK: Helpers
