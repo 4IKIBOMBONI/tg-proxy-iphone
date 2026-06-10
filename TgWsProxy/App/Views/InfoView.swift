@@ -28,8 +28,6 @@ struct InfoView: View {
                     При первом запуске iOS попросит разрешить добавление VPN-конфигурации.
                     • Сам туннель не перехватывает трафик — он нужен только чтобы система \
                     не выгружала прокси из памяти.
-                    • Для сборки нужен платный аккаунт Apple Developer с возможностью \
-                    Network Extensions (Packet Tunnel) и App Groups.
                     """)
                 }
 
@@ -46,9 +44,7 @@ struct InfoView: View {
 
                 Section("Лицензия") {
                     infoText("""
-                    Ядро прокси основано на tg-ws-proxy от Flowseal (MIT) и его \
-                    Android-форке от amurcanov (GPLv3). Этот iOS-порт распространяется \
-                    под GPLv3.
+                    Ядро прокси основано на tg-ws-proxy от Flowseal (MIT)
                     """)
                 }
             }

@@ -11,12 +11,30 @@ enum AppGroup {
 
     /// Bundle identifier of the Packet Tunnel provider extension.
     ///
-    /// Derived from the host app's own bundle id (`<app id>.tunnel`) so it
-    /// always matches `project.yml` regardless of the APP_ID_BASE you pick —
-    /// no hardcoded value to keep in sync. iOS requires the extension id to be
-    /// prefixed by the app id, which this guarantees.
+    /// We cannot derive it from `Bundle.main.bundleIdentifier`, because that
+    /// returns the *current* binary's id — fine in the main app, but in the
+    /// Control Center extension it would yield `…control.tunnel`, which never
+    /// exists. So we read it from a build-time Info.plist key (`APP_ID_BASE`)
+    /// that every target inherits from `project.yml` and falls back to a
+    /// derived value only as a last resort.
     static var tunnelBundleIdentifier: String {
-        let base = Bundle.main.bundleIdentifier ?? "com.tgwsproxy.app"
+        if let base = Bundle.main.object(forInfoDictionaryKey: "APP_ID_BASE") as? String,
+           !base.isEmpty {
+            return base + ".tunnel"
+        }
+        // Fallback: works in the main app where bundleIdentifier == APP_ID_BASE.
+        let me = Bundle.main.bundleIdentifier ?? "com.tgwsproxy.mobileapp"
+        // Strip any extension suffix (".tunnel", ".control") so we always
+        // resolve to the host app id even when called from an extension that
+        // was built without the APP_ID_BASE Info.plist key.
+        let base: String
+        if me.hasSuffix(".control") {
+            base = String(me.dropLast(".control".count))
+        } else if me.hasSuffix(".tunnel") {
+            base = String(me.dropLast(".tunnel".count))
+        } else {
+            base = me
+        }
         return base + ".tunnel"
     }
 
@@ -35,4 +53,10 @@ enum AppGroup {
     static var logFileURL: URL? {
         containerURL?.appendingPathComponent("proxy.log")
     }
+
+    /// Control Center widget "kind" identifier. Lives in the shared module so
+    /// both the main app (`ControlCenter.shared.reloadControls(ofKind:)`) and
+    /// the widget extension (`StaticControlConfiguration(kind:)`) use the
+    /// exact same string.
+    static let controlToggleKind = "com.tgwsproxy.controls.toggle"
 }

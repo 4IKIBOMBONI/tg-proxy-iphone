@@ -15,14 +15,14 @@ enum BackgroundMode: String, Codable, CaseIterable {
 
     var title: String {
         switch self {
-        case .vpn:   return "VPN-режим (фон)"
+        case .vpn:   return "Эмитация VPN-режима (фон)"
         case .local: return "Локальный (совместим с VPN)"
         }
     }
 
     var subtitle: String {
         switch self {
-        case .vpn:   return "Стабильная работа в фоне. Нельзя использовать одновременно с другим VPN."
+        case .vpn:   return "Стабильная работа в фоне. Нельзя использовать одновременно с VPN."
         case .local: return "Совместим с любым системным VPN. Работает, пока приложение открыто."
         }
     }

@@ -15,20 +15,31 @@ import NetworkExtension
 /// toggle the proxy from outside the main app is the VPN tunnel.
 ///
 /// All entry points are async and safe to call from any actor.
-public enum ProxyToggle {
+enum ProxyToggle {
 
-    public enum ToggleError: Error, LocalizedError {
+    enum ToggleError: Error, LocalizedError {
         case managerUnavailable
+        case notInstalled
         case startFailed(String)
         case stopFailed(String)
 
-        public var errorDescription: String? {
+        var errorDescription: String? {
             switch self {
             case .managerUnavailable:    return "VPN-профиль недоступен"
+            case .notInstalled:          return "Откройте приложение и нажмите «Запустить» один раз, чтобы установить VPN-профиль."
             case .startFailed(let m):    return "Не удалось запустить прокси: \(m)"
             case .stopFailed(let m):     return "Не удалось остановить прокси: \(m)"
             }
         }
+    }
+
+    /// Returns the existing manager without creating a new one. Used from
+    /// extensions / App Intents where we cannot legitimately ask the system
+    /// to install a new VPN profile (that requires user consent which only
+    /// the host app can request).
+    static func existingManager() async -> NETunnelProviderManager? {
+        let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
+        return managers.first
     }
 
     /// Loads (or creates) our `NETunnelProviderManager`, applies the latest
@@ -37,7 +48,7 @@ public enum ProxyToggle {
     /// Reused by both `start` and by the UI when the user toggles On Demand,
     /// so the user always gets a single coherent profile.
     @discardableResult
-    public static func syncManager(
+    static func syncManager(
         settings: ProxySettings = .load()
     ) async throws -> NETunnelProviderManager {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
@@ -62,7 +73,7 @@ public enum ProxyToggle {
     }
 
     /// Returns true if a VPN-mode tunnel is currently connected (or connecting).
-    public static func isRunning() async -> Bool {
+    static func isRunning() async -> Bool {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
         guard let mgr = managers.first else { return false }
         switch mgr.connection.status {
@@ -76,9 +87,38 @@ public enum ProxyToggle {
     /// the UI controller treats the active mode independently. The intent here
     /// is "the user explicitly asked the system-level toggle to turn on" — we
     /// honour that even if the app would normally run in-process.
-    public static func start() async throws {
+    ///
+    /// - Parameter allowInstall: when `true`, we are allowed to create and
+    ///   save a brand-new `NETunnelProviderManager` (which surfaces the
+    ///   "TG WS Proxy would like to add VPN configurations" system dialog).
+    ///   Extensions and App Intents must pass `false` — they cannot show that
+    ///   dialog and the call would silently fail. The main app passes `true`.
+    static func start(allowInstall: Bool = true) async throws {
         let settings = ProxySettings.load()
-        let mgr = try await syncManager(settings: settings)
+        let mgr: NETunnelProviderManager
+        if allowInstall {
+            mgr = try await syncManager(settings: settings)
+        } else {
+            // Extension path: re-use the existing profile, refresh it in place
+            // (no new install dialog), and start it. If there's nothing to
+            // re-use, surface a clear error instead of silently doing nothing.
+            guard let existing = await existingManager() else {
+                throw ToggleError.notInstalled
+            }
+            // Update the protocol config in case the user changed the port,
+            // but don't try to save if save would prompt — saving an existing
+            // managed profile from an extension is allowed.
+            let proto = (existing.protocolConfiguration as? NETunnelProviderProtocol)
+                ?? NETunnelProviderProtocol()
+            proto.providerBundleIdentifier = AppGroup.tunnelBundleIdentifier
+            proto.serverAddress = "127.0.0.1:\(settings.port)"
+            proto.providerConfiguration = ["port": settings.port]
+            existing.protocolConfiguration = proto
+            existing.isEnabled = true
+            try? await existing.saveToPreferences()
+            try? await existing.loadFromPreferences()
+            mgr = existing
+        }
         do {
             try mgr.connection.startVPNTunnel()
         } catch {
@@ -89,14 +129,18 @@ public enum ProxyToggle {
         await waitFor(connection: mgr.connection, target: [.connected]) // best effort
     }
 
-    public static func stop() async throws {
+    /// Stops the tunnel.
+    ///
+    /// - Parameter disableOnDemand: when `true`, also flip the On Demand
+    ///   master switch off so the tunnel won't immediately come back up the
+    ///   next time Telegram resolves a domain. The main app passes `true`
+    ///   when the user explicitly hits the big red Stop button; Siri /
+    ///   Control Center / per-app shortcuts pass `false` so a transient
+    ///   "pause" doesn't permanently disarm the auto-start.
+    static func stop(disableOnDemand: Bool = false) async throws {
         let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
         guard let mgr = managers.first else { return }
-        // If On Demand is on, just stopping the tunnel will let iOS re-trigger
-        // it on the next matching DNS lookup. Users almost always mean "really
-        // stop it" when they tap a stop control, so we flip On Demand off too.
-        // The next explicit start (or save in Settings) re-enables it.
-        if mgr.isOnDemandEnabled {
+        if disableOnDemand, mgr.isOnDemandEnabled {
             mgr.isOnDemandEnabled = false
             try? await mgr.saveToPreferences()
             try? await mgr.loadFromPreferences()
@@ -108,12 +152,12 @@ public enum ProxyToggle {
     /// Convenience used by the Control Center widget and Shortcuts toggle.
     /// Returns the new running state.
     @discardableResult
-    public static func toggle() async throws -> Bool {
+    static func toggle(allowInstall: Bool = true) async throws -> Bool {
         if await isRunning() {
             try await stop()
             return false
         } else {
-            try await start()
+            try await start(allowInstall: allowInstall)
             return true
         }
     }

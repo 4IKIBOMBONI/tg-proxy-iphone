@@ -2,6 +2,7 @@ import Foundation
 import NetworkExtension
 import Combine
 import UIKit
+import WidgetKit
 
 /// App-side controller that drives the proxy in one of two modes:
 ///
@@ -233,6 +234,13 @@ final class ProxyController: ObservableObject {
     }
 
     private func refreshFromStatus() {
+        // Whatever happened to the tunnel — our action, On Demand auto-start,
+        // a competing VPN that booted us off, or the user disabling the
+        // profile in Settings — ask iOS to repaint the Control Center tile.
+        // Cheap call; it just bumps a timeline so the widget extension's
+        // ControlValueProvider is invoked again.
+        reloadControlCenterTile()
+
         // Ignore VPN status changes while running locally — there is no tunnel.
         if activeMode == .local { return }
         guard let connection = manager?.connection else { state = .stopped; return }
@@ -246,6 +254,16 @@ final class ProxyController: ObservableObject {
             pollTask?.cancel(); pollTask = nil
         case .reasserting:   state = .running
         @unknown default:    state = .stopped
+        }
+    }
+
+    /// Forces the iOS 18 Control Center toggle to re-fetch its value. We call
+    /// this from every state-changing path (NEVPNStatus observer, manual
+    /// start/stop) so an external change (other VPN, Settings → VPN) doesn't
+    /// leave the tile stuck on "running".
+    private func reloadControlCenterTile() {
+        if #available(iOS 18.0, *) {
+            ControlCenter.shared.reloadControls(ofKind: AppGroup.controlToggleKind)
         }
     }
 

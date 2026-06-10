@@ -16,7 +16,7 @@ settings:
     # Single source of truth for bundle ids. Change this to something your
     # Apple Developer account owns; the tunnel id is always APP_ID_BASE.tunnel
     # so the "embedded binary must be prefixed by the app" rule always holds.
-    APP_ID_BASE: com.tgwsproxy.app
+    APP_ID_BASE: com.tgwsproxy.mobileapp
 
 packages: {}
 
@@ -46,6 +46,7 @@ targets:
       - sdk: CoreFoundation.framework
       - sdk: NetworkExtension.framework
       - sdk: AppIntents.framework
+      - sdk: WidgetKit.framework
 
   # ---------------------------------------------------- Packet Tunnel ext
   Tunnel:
@@ -61,6 +62,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Tunnel/Tunnel.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: Shared/TgWsProxyCore-Bridging-Header.h
         OTHER_LDFLAGS: ["-lresolv"]
+        # Tunnel doesn't expose any AppShortcuts to Siri; skip the Siri SSU
+        # training build phase so it can't fail on an unrelated extension.
+        LM_ENABLE_LINK_GENERATION_AT_DEPLOY: "NO"
     dependencies:
       - framework: ../core/build/TgWsProxyCore.xcframework
         embed: false
@@ -86,6 +90,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: $(APP_ID_BASE).control
         INFOPLIST_FILE: ControlExtension/Info.plist
         CODE_SIGN_ENTITLEMENTS: ControlExtension/ControlExtension.entitlements
+        # The control widget's SetValueIntent is invoked by the system through
+        # the widget binding, not via Siri / Shortcuts. Disable the Siri SSU
+        # training phase for this target — it tries to parse the widget
+        # extension's Info.plist and fails ("Unable to parse Info.plist")
+        # because widget-style Info.plists don't carry the keys the SSU
+        # processor expects. The intents themselves still work.
+        LM_ENABLE_LINK_GENERATION_AT_DEPLOY: "NO"
     dependencies:
       - sdk: NetworkExtension.framework
       - sdk: AppIntents.framework
@@ -95,9 +106,19 @@ targets:
 schemes:
   TgWsProxy:
     build:
+      # Order matters: the app target must be first so XcodeGen wires the
+      # scheme as an application launch (not as an "extension debug" launch,
+      # which would set wasCreatedForAppExtension=YES and pick the .appex as
+      # the runnable, leaving installd to reject the app bundle).
       targets:
         TgWsProxy: all
         Tunnel: all
         ControlExtension: all
     run:
       config: Debug
+      executable: TgWsProxy
+    profile:
+      config: Release
+      executable: TgWsProxy
+    archive:
+      config: Release

@@ -2,6 +2,14 @@ import SwiftUI
 
 struct SettingsView: View {
     @EnvironmentObject private var controller: ProxyController
+    /// Drives the keyboard-dismiss toolbar. The exact field identity doesn't
+    /// matter — we only need *some* focus state to feed the system's "is the
+    /// keyboard up" signal so the "Готово" button shows.
+    @FocusState private var focusedField: Field?
+
+    private enum Field: Hashable {
+        case port, cfDomain, fakeTlsDomain, dcIps, onDemandDomains
+    }
 
     private var poolBinding: Binding<Double> {
         Binding(
@@ -45,6 +53,7 @@ struct SettingsView: View {
                                     .autocorrectionDisabled()
                                     .textInputAutocapitalization(.never)
                                     .lineLimit(2...4)
+                                    .focused($focusedField, equals: .onDemandDomains)
                                 Text("Пусто — использовать список по умолчанию (\(ProxySettings.defaultOnDemandDomains.count) доменов Telegram).")
                                     .font(.caption2).foregroundStyle(.secondary)
                             }
@@ -64,6 +73,7 @@ struct SettingsView: View {
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 90)
+                            .focused($focusedField, equals: .port)
                     }
                     VStack(alignment: .leading) {
                         Text("Секрет (16 байт, hex)")
@@ -98,6 +108,7 @@ struct SettingsView: View {
                             .multilineTextAlignment(.trailing)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                            .focused($focusedField, equals: .cfDomain)
                     }
                 }
 
@@ -111,6 +122,7 @@ struct SettingsView: View {
                                 .multilineTextAlignment(.trailing)
                                 .autocorrectionDisabled()
                                 .textInputAutocapitalization(.never)
+                                .focused($focusedField, equals: .fakeTlsDomain)
                         }
                     }
                 }
@@ -124,6 +136,7 @@ struct SettingsView: View {
                             .font(.system(.footnote, design: .monospaced))
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
+                            .focused($focusedField, equals: .dcIps)
                         Text("Пусто — использовать встроенные адреса ядра.")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
@@ -131,6 +144,20 @@ struct SettingsView: View {
             }
             .navigationTitle("Настройки")
             .onDisappear { controller.saveSettings() }
+            // Dragging the form down dismisses the keyboard — this is the
+            // standard SwiftUI gesture users expect on iOS, and it's the
+            // only way to close a numeric keyboard that has no Return key.
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                // "Готово" button above the keyboard. SwiftUI shows the
+                // .keyboard placement only while *some* field is focused,
+                // so it appears for every TextField in the form.
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Готово") { focusedField = nil }
+                        .fontWeight(.semibold)
+                }
+            }
         }
     }
 }

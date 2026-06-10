@@ -35,7 +35,13 @@ struct ToggleProxyIntent: AppIntent {
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let nowRunning: Bool
         do {
-            nowRunning = try await ProxyToggle.toggle()
+            // App Intents invoked from Siri / Shortcuts / Lock Screen run in
+            // a background extension-style process that can't surface the
+            // "Allow VPN configuration" dialog. We refuse to silently fail by
+            // passing allowInstall: false; if the user has never started the
+            // proxy from the app, ProxyToggle.start throws .notInstalled with
+            // a clear message.
+            nowRunning = try await ProxyToggle.toggle(allowInstall: false)
         } catch {
             // Surface the underlying error in the Siri / Shortcuts result so
             // the user (or the automation) can react. We deliberately don't
@@ -61,7 +67,7 @@ struct StartProxyIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         do {
-            try await ProxyToggle.start()
+            try await ProxyToggle.start(allowInstall: false)
             return .result(dialog: "Прокси Telegram запущен")
         } catch {
             return .result(dialog: IntentDialog("Не удалось запустить прокси: \(error.localizedDescription)"))
